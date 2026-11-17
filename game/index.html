@@ -1,0 +1,180 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="data:,">
+<title>Solmar Bay: Street Heat — an open-world crime game</title>
+<style>
+  html, body { margin: 0; height: 100%; overflow: hidden; background: #0c121a;
+    font-family: "Segoe UI", system-ui, -apple-system, sans-serif; color: #f0f0f0; }
+  #game { position: fixed; inset: 0; width: 100%; height: 100%; display: block; touch-action: none; }
+  /* V2: a soft cinematic vignette that darkens the frame edges. */
+  #vignette { position: fixed; inset: 0; pointer-events: none; z-index: 2;
+    background: radial-gradient(ellipse at center, transparent 62%, rgba(8, 10, 18, 0.38) 100%); }
+  #status { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+
+  #hud { position: fixed; inset: 0; pointer-events: none; z-index: 5; }
+  .panel { background: rgba(10, 16, 24, 0.72); border: 1px solid rgba(255, 255, 255, 0.14);
+    border-radius: 10px; backdrop-filter: blur(3px); }
+
+  #hud-top { position: absolute; top: 14px; left: 14px; display: flex; gap: 10px; align-items: stretch; }
+  #hud-money { font-size: 26px; font-weight: 800; color: #7dff9a; padding: 6px 14px; letter-spacing: 0.5px; }
+  #hud-health { display: flex; align-items: center; gap: 8px; padding: 8px 12px; }
+  #hud-health-label { font-size: 12px; font-weight: 700; color: #ffb3b3; }
+  #hud-health-bar { width: 130px; height: 12px; background: rgba(255,255,255,0.18); border-radius: 6px; overflow: hidden; }
+  #hud-health-fill { height: 100%; width: 100%; background: #39d353; transition: width 0.2s; }
+  #hud-health-text { font-size: 13px; font-weight: 700; min-width: 26px; text-align: right; }
+  #hud-ammo { font-size: 18px; font-weight: 700; padding: 8px 12px; }
+
+  /* V2.1: the pause button and the wanted stars share one top-right row, so
+     the minimap (now below them on small screens) can never cover either. */
+  #hud-top-right { position: absolute; top: 14px; right: 14px; display: flex; gap: 8px; align-items: stretch; }
+  #hud-pause { pointer-events: auto; cursor: pointer; font-size: 20px; font-weight: 800; line-height: 1.4;
+    color: #fff; padding: 2px 12px; }
+  #hud-stars { font-size: 30px; letter-spacing: 4px;
+    color: #ffd23f; text-shadow: 0 0 12px rgba(0,0,0,0.8); padding: 2px 14px; }
+  #hud-stars.hot { color: #ff5a4a; animation: pulse 0.7s infinite alternate; }
+  @keyframes pulse { from { transform: scale(1); } to { transform: scale(1.07); } }
+
+  #hud-objective { position: absolute; top: 66px; left: 50%; transform: translateX(-50%);
+    font-size: 17px; font-weight: 700; color: #ffe94a; padding: 8px 18px; text-align: center;
+    text-shadow: 0 1px 3px rgba(0,0,0,0.9); max-width: 70vw; }
+  #hud-toast { position: absolute; top: 118px; left: 50%; transform: translateX(-50%);
+    font-size: 15px; padding: 8px 16px; text-align: center; transition: opacity 0.3s;
+    max-width: 70vw; background: rgba(10, 16, 24, 0.72); border-radius: 8px; }
+  #hud-banner { position: absolute; top: 30%; left: 50%; transform: translate(-50%, -50%) scale(0.94);
+    text-align: center; opacity: 0; transition: opacity 0.35s, transform 0.35s; pointer-events: none; }
+  #hud-banner.show { opacity: 1; transform: translate(-50%, -50%) scale(1); }
+  #hud-banner-title { font-size: 52px; font-weight: 900; letter-spacing: 3px; color: #ffd23f;
+    text-shadow: 0 3px 0 #a83c00, 0 6px 22px rgba(0,0,0,0.7); }
+  #hud-banner-sub { font-size: 19px; margin-top: 6px; text-shadow: 0 2px 8px rgba(0,0,0,0.9); }
+
+  #hud-speed { position: absolute; right: 16px; bottom: 258px; font-size: 30px; font-weight: 800;
+    color: #fff; text-shadow: 0 2px 8px rgba(0,0,0,0.9); }
+  #minimap-wrap { position: absolute; right: 14px; bottom: 14px; padding: 6px; }
+  #minimap { display: block; width: 200px; height: 200px; border-radius: 6px; }
+  #minimap-label { font-size: 11px; font-weight: 700; letter-spacing: 2px; color: #cfe8ff;
+    text-align: center; padding-top: 3px; }
+  #hud-hint { position: absolute; bottom: 18px; left: 50%; transform: translateX(-50%);
+    font-size: 16px; font-weight: 700; color: #fff; background: rgba(10,16,24,0.75);
+    padding: 8px 18px; border-radius: 8px; text-shadow: 0 1px 3px #000; }
+  #hud-hint:empty { display: none; }
+  /* V2.1: on-screen touch controls (built by input.js) — a 4-way D-pad
+     bottom-left and a 2x2 action cluster bottom-right. Semi-transparent so
+     the game stays visible behind them; shown only for coarse pointers. */
+  #touch-controls { position: fixed; inset: auto 0 0 0; display: none;
+    justify-content: space-between; align-items: flex-end;
+    padding: 0 14px 18px; pointer-events: none; z-index: 25; }
+  #touch-dpad { display: grid; grid-template-columns: repeat(3, 52px);
+    grid-template-rows: repeat(3, 52px); gap: 6px; pointer-events: auto; }
+  #touch-actions { display: grid; grid-template-columns: repeat(2, 52px);
+    grid-template-rows: repeat(2, 52px); gap: 8px; pointer-events: auto; }
+  .tbtn { width: 52px; height: 52px; border-radius: 12px;
+    border: 1px solid rgba(255,255,255,0.35); background: rgba(10,16,24,0.45);
+    color: #fff; font-size: 20px; font-weight: 700; touch-action: none;
+    user-select: none; -webkit-user-select: none; }
+  .tbtn:active { background: rgba(255,255,255,0.25); }
+  .tbtn-spacer { visibility: hidden; }
+  #hud-controls { position: absolute; left: 14px; bottom: 14px; font-size: 12px; color: rgba(255,255,255,0.75);
+    background: rgba(10,16,24,0.6); padding: 8px 12px; border-radius: 8px; line-height: 1.7; }
+
+  #menu { position: fixed; inset: 0; z-index: 10; display: flex; align-items: center; justify-content: center;
+    background: linear-gradient(160deg, rgba(8,14,24,0.82), rgba(40,16,40,0.72)); backdrop-filter: blur(2px); }
+  #menu.hidden { display: none; }
+  #menu-card { max-width: 640px; width: calc(100% - 40px); text-align: center; padding: 36px 40px 30px;
+    background: rgba(10, 16, 24, 0.88); border: 1px solid rgba(255, 210, 63, 0.35); border-radius: 16px;
+    box-shadow: 0 20px 60px rgba(0,0,0,0.6); }
+  #menu-title { font-size: 54px; font-weight: 900; letter-spacing: 4px; margin: 0;
+    background: linear-gradient(90deg, #ffd23f, #ff7a3c, #ff5a7a);
+    -webkit-background-clip: text; background-clip: text; color: transparent; }
+  #menu-subtitle { font-size: 15px; letter-spacing: 6px; color: #8fd8ff; margin: 2px 0 18px; font-weight: 700; }
+  #menu-story { font-size: 16px; line-height: 1.65; color: #e8e8e8; margin: 0 0 24px; }
+  #menu-buttons { display: flex; flex-direction: column; gap: 10px; align-items: center; }
+  .btn { pointer-events: auto; cursor: pointer; font-size: 17px; font-weight: 800; padding: 12px 28px;
+    border-radius: 10px; border: 2px solid rgba(255,255,255,0.25); background: rgba(255,255,255,0.1);
+    color: #fff; min-width: 300px; }
+  .btn:hover { background: rgba(255,255,255,0.2); }
+  .btn.primary { background: linear-gradient(90deg, #ff9a3c, #ff5a7a); border-color: transparent; }
+  .btn.primary:hover { filter: brightness(1.12); }
+
+  /* V2.1: compact HUD for small screens, coarse pointers (phones/tablets),
+     and short landscape screens — a landscape phone is ~844px wide, so the
+     old max-width: 700px query never matched it and it got the 200px
+     desktop minimap. The minimap now moves to the top-right below the
+     stars (it used to sit bottom-right, covering a third of a landscape
+     phone and colliding with the touch buttons), the speed readout sits
+     above the action cluster, and the objective narrows so it can't reach
+     the minimap. */
+  @media (max-width: 700px), (pointer: coarse), (max-height: 500px) {
+    #hud-money { font-size: 19px; padding: 4px 10px; }
+    #hud-health-bar { width: 80px; }
+    #hud-health { padding: 6px 8px; }
+    #hud-ammo { font-size: 15px; padding: 6px 8px; }
+    #hud-top-right { top: 10px; right: 10px; gap: 6px; }
+    #hud-pause { font-size: 16px; padding: 2px 10px; }
+    #hud-stars { font-size: 22px; letter-spacing: 2px; }
+    #hud-objective { font-size: 13px; top: 56px; max-width: 58vw; }
+    #hud-toast { font-size: 13px; top: 100px; max-width: 92vw; }
+    #hud-banner-title { font-size: 34px; letter-spacing: 2px; }
+    #hud-banner-sub { font-size: 15px; }
+    #minimap-wrap { top: 80px; right: 10px; bottom: auto; opacity: 0.92; }
+    #minimap { width: 110px; height: 110px; }
+    #minimap-label { display: none; }
+    #hud-speed { bottom: 132px; right: 16px; font-size: 20px; }
+    #hud-controls { display: none; }
+    #hud-hint { bottom: 150px; font-size: 13px; }
+    #menu-title { font-size: 36px; letter-spacing: 2px; }
+    #menu-card { padding: 22px 18px; }
+    .btn { min-width: 240px; }
+    #touch-controls { padding: 0 12px 12px; }
+  }
+</style>
+<script type="importmap">
+{ "imports": { "three": "./vendor/three.module.min.js" } }
+</script>
+</head>
+<body>
+<canvas id="game" aria-label="Solmar Bay: Street Heat — an open-world crime game"></canvas>
+<div id="vignette" aria-hidden="true"></div>
+<p id="status" role="status" aria-live="polite"></p>
+
+<div id="hud">
+  <div id="hud-top">
+    <div id="hud-money" class="panel">$250</div>
+    <div id="hud-health" class="panel">
+      <span id="hud-health-label">HEALTH</span>
+      <div id="hud-health-bar"><div id="hud-health-fill"></div></div>
+      <span id="hud-health-text">100</span>
+    </div>
+    <div id="hud-ammo" class="panel">🔫 24</div>
+  </div>
+  <div id="hud-top-right">
+    <button id="hud-pause" class="panel" aria-label="Pause">⏸</button>
+    <div id="hud-stars" class="panel">☆☆☆☆☆</div>
+  </div>
+  <div id="hud-objective" class="panel" style="display:none"></div>
+  <div id="hud-toast" style="opacity:0"></div>
+  <div id="hud-banner"><div id="hud-banner-title"></div><div id="hud-banner-sub"></div></div>
+  <div id="hud-speed"></div>
+  <div id="minimap-wrap" class="panel">
+    <canvas id="minimap" width="200" height="200"></canvas>
+    <div id="minimap-label">SOLMAR BAY</div>
+  </div>
+  <div id="hud-hint"></div>
+  <div id="hud-controls">WASD move / drive · Shift run · E enter / steal car<br>
+    Click punch · Q shoot · Space jump / handbrake · P pause · M mute</div>
+</div>
+
+<div id="menu" class="hidden">
+  <div id="menu-card">
+    <h1 id="menu-title">SOLMAR BAY</h1>
+    <div id="menu-subtitle">— STREET HEAT —</div>
+    <p id="menu-story"></p>
+    <div id="menu-buttons"></div>
+  </div>
+</div>
+
+<script type="module" src="./src/main.js"></script>
+</body>
+</html>
