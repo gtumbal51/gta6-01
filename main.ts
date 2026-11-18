@@ -10,7 +10,7 @@
 // In the grader the output directory is /output (MAKEFUN_OUTPUT_DIR unset).
 // Serve the game locally with:  node serve.ts   (then open http://localhost:8080)
 
-import { cpSync, existsSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { cpSync, existsSync, mkdirSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { buildDossier } from './vendor/makefun-game.ts';
@@ -20,8 +20,13 @@ const repoRoot = fileURLToPath(new URL('.', import.meta.url));
 const outDir = process.env.MAKEFUN_OUTPUT_DIR ?? '/output';
 
 // Start from a clean output directory so stale files can never leak into a run.
-rmSync(outDir, { recursive: true, force: true });
+// Clear only the CONTENTS, never the directory itself: the grader mounts
+// /output and runs as user 65534 (nobody), who cannot delete the mount point
+// from its parent, so rmSync(outDir) throws EACCES and fails the run.
 mkdirSync(outDir, { recursive: true });
+for (const entry of readdirSync(outDir)) {
+  rmSync(join(outDir, entry), { recursive: true, force: true });
+}
 
 // The game itself.
 cpSync(join(repoRoot, 'game'), join(outDir, 'game'), { recursive: true });
