@@ -6,6 +6,7 @@
 import * as THREE from 'three';
 import { angleLerp, clamp, dist2d, pushOutOfBox } from './utils.js';
 import { applyWalkCycle, makePersonMesh } from './pedestrians.js';
+import { SIDEWALK_H } from './city.js';
 
 export class Player {
   constructor(scene, city) {
@@ -34,7 +35,8 @@ export class Player {
       hairColor: 0x4a2a18,
     });
     this.mesh = mesh;
-    this.mesh.group.position.set(this.x, 0, this.z);
+    this.y = this.city.isOnRoad(this.x, this.z) ? 0 : SIDEWALK_H;
+    this.mesh.group.position.set(this.x, this.y, this.z);
     scene.add(this.mesh.group);
   }
 
@@ -65,15 +67,20 @@ export class Player {
     const nz = this.z + -Math.cos(this.heading) * this.speed * dt * (len > 0.01 ? 1 : 0);
     this.x = nx;
     this.z = nz;
+    // Ground level follows the sidewalk: raised off-road, road level on the
+    // asphalt (crosswalks included). Jumps launch and land from it.
+    const groundY = this.city.isOnRoad(this.x, this.z) ? 0 : SIDEWALK_H;
     // Jump.
-    if (input.hit('Space') && this.y === 0) this.vy = 7.5;
-    if (this.y > 0 || this.vy !== 0) {
+    if (input.hit('Space') && this.y === groundY) this.vy = 7.5;
+    if (this.y > groundY || this.vy !== 0) {
       this.vy -= 22 * dt;
       this.y += this.vy * dt;
-      if (this.y <= 0) {
-        this.y = 0;
+      if (this.y <= groundY) {
+        this.y = groundY;
         this.vy = 0;
       }
+    } else {
+      this.y = groundY;
     }
     // Building collisions.
     for (const box of this.city.colliders) {
@@ -141,7 +148,8 @@ export class Player {
     this.onFoot = true;
     this.car = null;
     this.mesh.group.visible = true;
-    this.mesh.group.position.set(this.x, 0, this.z);
+    this.y = this.city.isOnRoad(this.x, this.z) ? 0 : SIDEWALK_H;
+    this.mesh.group.position.set(this.x, this.y, this.z);
   }
 
   teleport(x, z, heading = 0) {
@@ -149,6 +157,7 @@ export class Player {
     this.z = z;
     this.heading = heading;
     this.speed = 0;
+    this.y = this.city.isOnRoad(x, z) ? 0 : SIDEWALK_H;
     if (this.car) {
       this.car.x = x;
       this.car.z = z;

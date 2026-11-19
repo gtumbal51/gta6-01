@@ -443,10 +443,10 @@ function setupShot(mode) {
     // or near the staging spot, is moved far away on a distant road, so the
     // shot shows the car cruising on the open road instead of rear-ending a
     // slower car and grinding to a halt. (Shot staging only; normal play is
-    // untouched.) NOTE: the east-west roads cannot be used for this shot —
-    // a city-generation bug spills the second building of every count=2
-    // block south onto the road below it, so every east-west road except
-    // the far edge is blocked; the north-south roads are all clear.
+    // untouched.) NOTE: the east-west roads used to be blocked by a
+    // city-generation bug (count=2 buildings spilling onto the road below
+    // their block) — fixed in V2.2, but this shot keeps the north-south
+    // road, which photographs better with the sun behind the camera.
     const driveRoad = 120;
     for (const t of traffic.cars) {
       const onDriveRoad = !t.horizontal && t.road === driveRoad && t.z < 80;

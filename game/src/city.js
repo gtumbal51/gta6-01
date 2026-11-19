@@ -3,15 +3,20 @@
 // V2: richer street markings (edge lines, stop bars, parking bays, sidewalk
 // tiles), shop signs and balconies on the facades, a gradient sky with a
 // glowing sun, traffic lights, bus stops, round-canopy trees and curbs.
+// V2.2: roads read as real roads (noisy asphalt, tyre-wear lanes, double
+// yellow centre lines, lane arrows, markings broken at intersections);
+// building placement fixed (no footprint ever crosses its block edge);
+// raised sidewalks with a proper curb line and tactile paving at crossings.
 // Exports the layout data (roads, colliders, landmarks) the other systems use.
 
 import * as THREE from 'three';
-import { clamp, dist2d, hash2, pick, rand, randInt } from './utils.js';
+import { clamp, dist2d, hash2, mulberry32, pick, rand, randInt } from './utils.js';
 
 export const PITCH = 60; // distance between road centrelines
 export const ROAD_HALF = 7; // half the road width
 export const CITY_HALF = 270; // city spans -270..270 on both axes
 export const ROAD_LINES = [-240, -180, -120, -60, 0, 60, 120, 180, 240];
+export const SIDEWALK_H = 0.12; // raised sidewalk top (pedestrians/players stand here off-road)
 
 const PALETTE = {
   facades: [0xd8c9a3, 0xc9b8a0, 0xb8c4c9, 0xd9a08a, 0xa8b8a0, 0xc9a8b8, 0xe0d0b8, 0x9fb4c7, 0xd8b878],
@@ -152,31 +157,143 @@ function groundTexture(rng) {
       g.fillRect(px, pz, pw, ph);
     }
   }
-  // Roads: asphalt strips.
-  g.fillStyle = '#3c3f45';
+  // Roads: asphalt with real variation — a noisy base, darker tyre-wear
+  // bands where wheels actually run, pale repair patches and hairline
+  // cracks, so the surface reads as worn tarmac instead of a flat slab.
+  // (A private seeded rng keeps the shared rng stream untouched, so the
+  // seeded city layout other systems use never shifts.)
+  const nrng = mulberry32(0x2BAD);
+  const inMouth = (t) => ROAD_LINES.some((r) => Math.abs(t - r) < ROAD_HALF + 3);
+  // Open stretches of one road (between intersection mouths), for markings
+  // that stop at the intersection box like real paint does.
+  const openSpans = () => {
+    const spans = [];
+    let start = -CITY_HALF;
+    for (const r of ROAD_LINES) {
+      const s0 = r - ROAD_HALF - 3;
+      const s1 = r + ROAD_HALF + 3;
+      if (s0 > start) spans.push([start, s0]);
+      start = Math.max(start, s1);
+    }
+    if (start < CITY_HALF) spans.push([start, CITY_HALF]);
+    return spans;
+  };
+  const spans = openSpans();
   for (const line of ROAD_LINES) {
     const p = worldToPx(line - ROAD_HALF);
     const w = worldToPx(line + ROAD_HALF) - p;
+    g.fillStyle = '#36393f';
     g.fillRect(p, 0, w, S);
     g.fillRect(0, p, S, w);
+    // Large soft blotches: sun-bleached and oil-darkened patches.
+    for (let i = 0; i < 46; i++) {
+      const along = -CITY_HALF + nrng() * CITY_HALF * 2;
+      const off = (nrng() - 0.5) * (ROAD_HALF * 2 - 4);
+      const r = 14 + nrng() * 42;
+      const light = nrng() < 0.55;
+      g.fillStyle = light ? `rgba(210,210,200,${0.03 + nrng() * 0.05})` : `rgba(8,8,10,${0.04 + nrng() * 0.07})`;
+      g.beginPath();
+      g.ellipse(worldToPx(along), worldToPx(line + off), r, r * (0.4 + nrng() * 0.5), nrng() * Math.PI, 0, Math.PI * 2);
+      g.fill();
+      g.beginPath();
+      g.ellipse(worldToPx(line + off), worldToPx(along), r * (0.4 + nrng() * 0.5), r, nrng() * Math.PI, 0, Math.PI * 2);
+      g.fill();
+    }
+    // Tyre-wear bands: two darker tracks per driving lane.
+    g.fillStyle = 'rgba(12,12,14,0.13)';
+    for (const lane of [-3.4, 3.4]) {
+      for (const off of [-0.85, 0.85]) {
+        const c = worldToPx(line + lane + off);
+        g.fillRect(c - 2, 0, 4, S);
+        g.fillRect(0, c - 2, S, 4);
+      }
+    }
+    // Speckle noise across the asphalt.
+    for (let i = 0; i < 900; i++) {
+      const along = -CITY_HALF + nrng() * CITY_HALF * 2;
+      const off = (nrng() - 0.5) * (ROAD_HALF * 2 - 1);
+      g.fillStyle = nrng() < 0.5 ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.08)';
+      g.fillRect(worldToPx(along), worldToPx(line + off), 2, 2);
+      g.fillRect(worldToPx(line + off), worldToPx(along), 2, 2);
+    }
+    // Tar repair patches (dark rectangles with a pale seam) and cracks.
+    for (let i = 0; i < 7; i++) {
+      const along = -CITY_HALF + 20 + nrng() * (CITY_HALF * 2 - 40);
+      if (inMouth(along)) continue;
+      const off = (nrng() - 0.5) * 7;
+      const pw = 14 + nrng() * 22;
+      const ph = 8 + nrng() * 10;
+      g.fillStyle = 'rgba(18,18,20,0.55)';
+      g.fillRect(worldToPx(along - pw / 2), worldToPx(line + off - ph / 2), worldToPx(along + pw / 2) - worldToPx(along - pw / 2), worldToPx(line + off + ph / 2) - worldToPx(line + off - ph / 2));
+      g.fillRect(worldToPx(line + off - ph / 2), worldToPx(along - pw / 2), worldToPx(line + off + ph / 2) - worldToPx(line + off - ph / 2), worldToPx(along + pw / 2) - worldToPx(along - pw / 2));
+      g.strokeStyle = 'rgba(220,220,210,0.25)';
+      g.lineWidth = 1;
+      g.strokeRect(worldToPx(along - pw / 2), worldToPx(line + off - ph / 2), worldToPx(along + pw / 2) - worldToPx(along - pw / 2), worldToPx(line + off + ph / 2) - worldToPx(line + off - ph / 2));
+      g.strokeRect(worldToPx(line + off - ph / 2), worldToPx(along - pw / 2), worldToPx(line + off + ph / 2) - worldToPx(line + off - ph / 2), worldToPx(along + pw / 2) - worldToPx(along - pw / 2));
+    }
+    for (let i = 0; i < 5; i++) {
+      const along = -CITY_HALF + 20 + nrng() * (CITY_HALF * 2 - 40);
+      if (inMouth(along)) continue;
+      const off = (nrng() - 0.5) * 9;
+      g.strokeStyle = 'rgba(10,10,12,0.5)';
+      g.lineWidth = 1;
+      g.beginPath();
+      let cxp = worldToPx(along);
+      let czp = worldToPx(line + off);
+      g.moveTo(cxp, czp);
+      for (let s = 0; s < 6; s++) {
+        cxp += (nrng() - 0.5) * 14;
+        czp += (nrng() - 0.5) * 8;
+        g.lineTo(cxp, czp);
+      }
+      g.stroke();
+    }
   }
-  // White edge lines along each road.
-  g.fillStyle = 'rgba(240,240,235,0.75)';
+  // Centre lines: double solid yellow (two-way street), broken at
+  // intersections. Edge lines: solid white, also broken at intersections.
+  g.fillStyle = '#d8b93a';
   for (const line of ROAD_LINES) {
-    const e1 = worldToPx(line - ROAD_HALF + 0.6);
-    const e2 = worldToPx(line + ROAD_HALF - 0.6);
-    g.fillRect(e1, 0, 2, S);
-    g.fillRect(e2, 0, 2, S);
-    g.fillRect(0, e1, S, 2);
-    g.fillRect(0, e2, S, 2);
+    for (const [s0, s1] of spans) {
+      for (const off of [-0.5, 0.5]) {
+        g.fillRect(worldToPx(s0), worldToPx(line + off) - 1, worldToPx(s1) - worldToPx(s0), 2);
+        g.fillRect(worldToPx(line + off) - 1, worldToPx(s0), 2, worldToPx(s1) - worldToPx(s0));
+      }
+    }
   }
-  // Lane dashes (centre of each road).
-  g.fillStyle = '#e8d878';
+  g.fillStyle = 'rgba(240,240,235,0.85)';
   for (const line of ROAD_LINES) {
-    const p = worldToPx(line);
-    for (let t = -CITY_HALF; t < CITY_HALF; t += 12) {
-      g.fillRect(worldToPx(t), p - 2, worldToPx(t + 5) - worldToPx(t), 4);
-      g.fillRect(p - 2, worldToPx(t), 4, worldToPx(t + 5) - worldToPx(t));
+    for (const [s0, s1] of spans) {
+      for (const e of [-ROAD_HALF + 0.7, ROAD_HALF - 0.7]) {
+        g.fillRect(worldToPx(s0), worldToPx(line + e) - 1, worldToPx(s1) - worldToPx(s0), 2);
+        g.fillRect(worldToPx(line + e) - 1, worldToPx(s0), 2, worldToPx(s1) - worldToPx(s0));
+      }
+    }
+  }
+  // Lane arrows: one per lane, pointing the way that lane travels
+  // (opposite directions on opposite sides), skipped at intersections.
+  const drawArrow = (px, py, angle) => {
+    g.save();
+    g.translate(px, py);
+    g.rotate(angle);
+    g.fillStyle = 'rgba(240,240,235,0.85)';
+    g.fillRect(-7, -1.5, 9, 3);
+    g.beginPath();
+    g.moveTo(2, -5);
+    g.lineTo(10, 0);
+    g.lineTo(2, 5);
+    g.closePath();
+    g.fill();
+    g.restore();
+  };
+  for (const line of ROAD_LINES) {
+    for (let t = -CITY_HALF + 24; t < CITY_HALF - 10; t += 48) {
+      if (inMouth(t) || inMouth(t + 12)) continue;
+      // Road along X: +z lane travels +X, -z lane travels -X.
+      drawArrow(worldToPx(t), worldToPx(line + 3.4), 0);
+      drawArrow(worldToPx(t + 24), worldToPx(line - 3.4), Math.PI);
+      // Road along Z: +x lane travels +Z, -x lane travels -Z.
+      drawArrow(worldToPx(line + 3.4), worldToPx(t), Math.PI / 2);
+      drawArrow(worldToPx(line - 3.4), worldToPx(t + 24), -Math.PI / 2);
     }
   }
   // Stop bars before every intersection, plus manhole covers.
@@ -235,6 +352,82 @@ function groundTexture(rng) {
   const tex = new THREE.CanvasTexture(cv);
   tex.colorSpace = THREE.SRGBColorSpace;
   tex.anisotropy = 8;
+  return tex;
+}
+
+function sidewalkTexture() {
+  // Paving tiles for the raised sidewalk slabs: an 8x8 grid of concrete
+  // pavers with per-paver shade variation, joint lines and speckle, so the
+  // walk reads as laid pavement instead of a flat grey sheet.
+  const S = 512;
+  const cv = document.createElement('canvas');
+  cv.width = S;
+  cv.height = S;
+  const g = cv.getContext('2d');
+  const nrng = mulberry32(0x5AB);
+  g.fillStyle = '#a39c8e';
+  g.fillRect(0, 0, S, S);
+  const step = S / 8;
+  for (let i = 0; i < 8; i++) {
+    for (let j = 0; j < 8; j++) {
+      const v = 148 + Math.floor(nrng() * 26);
+      g.fillStyle = `rgb(${v},${v - 5},${v - 14})`;
+      g.fillRect(i * step + 1, j * step + 1, step - 2, step - 2);
+      // A few stained / cracked pavers.
+      if (nrng() < 0.14) {
+        g.fillStyle = `rgba(60,50,40,${0.08 + nrng() * 0.12})`;
+        g.fillRect(i * step + 1, j * step + 1, step - 2, step - 2);
+      }
+      if (nrng() < 0.08) {
+        g.strokeStyle = 'rgba(40,36,30,0.5)';
+        g.lineWidth = 1;
+        g.beginPath();
+        g.moveTo(i * step + nrng() * step, j * step + 2);
+        g.lineTo(i * step + nrng() * step, (j + 1) * step - 2);
+        g.stroke();
+      }
+    }
+  }
+  for (let i = 0; i < 500; i++) {
+    g.fillStyle = nrng() < 0.5 ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.06)';
+    g.fillRect(nrng() * S, nrng() * S, 2, 2);
+  }
+  const tex = new THREE.CanvasTexture(cv);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  tex.wrapS = THREE.RepeatWrapping;
+  tex.wrapT = THREE.RepeatWrapping;
+  tex.repeat.set(4, 4);
+  tex.anisotropy = 4;
+  return tex;
+}
+
+function tactileTexture() {
+  // Yellow blister paving: raised truncated domes in a grid, the standard
+  // warning surface at crossings.
+  const S = 64;
+  const cv = document.createElement('canvas');
+  cv.width = S;
+  cv.height = S;
+  const g = cv.getContext('2d');
+  g.fillStyle = '#d8b93a';
+  g.fillRect(0, 0, S, S);
+  for (let i = 0; i < 4; i++) {
+    for (let j = 0; j < 4; j++) {
+      const x = 8 + i * 16;
+      const y = 8 + j * 16;
+      const grad = g.createRadialGradient(x - 2, y - 2, 1, x, y, 6);
+      grad.addColorStop(0, '#f5dd6a');
+      grad.addColorStop(0.7, '#c8a828');
+      grad.addColorStop(1, '#a8881e');
+      g.fillStyle = grad;
+      g.beginPath();
+      g.arc(x, y, 6, 0, Math.PI * 2);
+      g.fill();
+    }
+  }
+  const tex = new THREE.CanvasTexture(cv);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  tex.anisotropy = 4;
   return tex;
 }
 
@@ -302,35 +495,102 @@ export class City {
     ocean.userData.isOcean = true;
     this.scene.add(ocean);
     this.ocean = ocean;
-    this._buildCurbs();
+    this._buildSidewalks();
   }
 
-  _buildCurbs() {
-    // Low concrete curbs along both edges of every road, skipping the
-    // intersection mouths so crosswalks stay open. One InstancedMesh.
-    const positions = [];
-    for (const line of ROAD_LINES) {
-      for (let t = -CITY_HALF; t <= CITY_HALF; t += 10) {
-        if (ROAD_LINES.some((r) => Math.abs(t - r) < ROAD_HALF + 3)) continue;
-        positions.push([line - ROAD_HALF - 0.4, t, 0]);
-        positions.push([line + ROAD_HALF + 0.4, t, 0]);
-        positions.push([t, line - ROAD_HALF - 0.4, 1]);
-        positions.push([t, line + ROAD_HALF + 0.4, 1]);
-      }
-    }
-    const geo = new THREE.BoxGeometry(10, 0.14, 0.8);
-    const mat = new THREE.MeshStandardMaterial({ color: 0xb8b2a6, roughness: 0.9 });
-    const curbs = new THREE.InstancedMesh(geo, mat, positions.length);
+  _buildSidewalks() {
+    // Real pedestrian space, in three layers:
+    // 1) a raised slab per block (top at SIDEWALK_H) with paving tiles, so
+    //    the sidewalk reads as a platform with a curb face at the road edge;
+    // 2) a curb-stone line along every road edge, skipping the intersection
+    //    mouths so crosswalks stay open;
+    // 3) yellow tactile (blister) pads at every intersection corner, where
+    //    pedestrians step off the kerb onto the crossing.
+    const rng = this.rng;
+    // --- Layer 1: raised slabs (one InstancedMesh, 8x8 blocks). ---
+    const slabTex = sidewalkTexture();
+    const slabMat = new THREE.MeshStandardMaterial({ map: slabTex, roughness: 0.95, metalness: 0 });
+    const slabGeo = new THREE.BoxGeometry(1, 1, 1);
+    const slabs = new THREE.InstancedMesh(slabGeo, slabMat, 64);
     const m = new THREE.Matrix4();
     const q = new THREE.Quaternion();
+    const white = new THREE.Color(0xffffff);
+    const parkTint = new THREE.Color(0x6a9a58);
+    const plazaTint = new THREE.Color(0xd8c8a0);
+    let si = 0;
+    for (let bi = 0; bi < 8; bi++) {
+      for (let bj = 0; bj < 8; bj++) {
+        const x0 = ROAD_LINES[bi] + ROAD_HALF + 0.6;
+        const z0 = ROAD_LINES[bj] + ROAD_HALF + 0.6;
+        const x1 = ROAD_LINES[bi + 1] - ROAD_HALF - 0.6;
+        const z1 = ROAD_LINES[bj + 1] - ROAD_HALF - 0.6;
+        m.compose(
+          new THREE.Vector3((x0 + x1) / 2, SIDEWALK_H / 2, (z0 + z1) / 2),
+          q,
+          new THREE.Vector3(x1 - x0, SIDEWALK_H, z1 - z0),
+        );
+        slabs.setMatrixAt(si, m);
+        const isPark = (bi === 2 && bj === 6) || (bi === 6 && bj === 2);
+        const isPlaza = bi === 4 && bj === 4;
+        slabs.setColorAt(si, isPark ? parkTint : isPlaza ? plazaTint : white);
+        si++;
+      }
+    }
+    slabs.receiveShadow = true;
+    this.scene.add(slabs);
+    // --- Layer 2: curb stones along both edges of every road. ---
+    const positions = [];
+    for (const line of ROAD_LINES) {
+      for (let t = -CITY_HALF; t <= CITY_HALF; t += 6) {
+        if (ROAD_LINES.some((r) => Math.abs(t - r) < ROAD_HALF + 3)) continue;
+        // rot: the stone's long axis must run ALONG the road — along Z for
+        // a Z-running road (rot 1), along X for an X-running road (rot 0).
+        // (V2 had these swapped, so the stones lay across the road like
+        // planks — the most visible road defect in the old screenshots.)
+        positions.push([line - ROAD_HALF - 0.55, t, 1]);
+        positions.push([line + ROAD_HALF + 0.55, t, 1]);
+        positions.push([t, line - ROAD_HALF - 0.55, 0]);
+        positions.push([t, line + ROAD_HALF + 0.55, 0]);
+      }
+    }
+    const curbGeo = new THREE.BoxGeometry(6, 0.18, 0.5);
+    const curbMat = new THREE.MeshStandardMaterial({ color: 0xcfc8b8, roughness: 0.9 });
+    const curbs = new THREE.InstancedMesh(curbGeo, curbMat, positions.length);
     const up = new THREE.Vector3(0, 1, 0);
+    const shade = new THREE.Color();
     positions.forEach(([x, z, rot], i) => {
       q.setFromAxisAngle(up, rot ? Math.PI / 2 : 0);
-      m.compose(new THREE.Vector3(x, 0.07, z), q, new THREE.Vector3(1, 1, 1));
+      m.compose(new THREE.Vector3(x, 0.09, z), q, new THREE.Vector3(1, 1, 1));
       curbs.setMatrixAt(i, m);
+      // Slight per-stone tone variation so the line reads as laid stones.
+      const v = 0.88 + rng() * 0.12;
+      shade.setRGB(v, v * 0.985, v * 0.94);
+      curbs.setColorAt(i, shade);
     });
     curbs.receiveShadow = true;
     this.scene.add(curbs);
+    // --- Layer 3: tactile paving pads at intersection corners. ---
+    const padTex = tactileTexture();
+    const padMat = new THREE.MeshStandardMaterial({ map: padTex, roughness: 0.9 });
+    const padGeo = new THREE.BoxGeometry(2.6, 0.04, 2.6);
+    const pads = new THREE.InstancedMesh(padGeo, padMat, ROAD_LINES.length * ROAD_LINES.length * 4);
+    let pi = 0;
+    for (const rx of ROAD_LINES) {
+      for (const rz of ROAD_LINES) {
+        for (const sx of [-1, 1]) {
+          for (const sz of [-1, 1]) {
+            m.compose(
+              new THREE.Vector3(rx + sx * (ROAD_HALF + 1.6), SIDEWALK_H + 0.02, rz + sz * (ROAD_HALF + 1.6)),
+              q,
+              new THREE.Vector3(1, 1, 1),
+            );
+            pads.setMatrixAt(pi++, m);
+          }
+        }
+      }
+    }
+    pads.receiveShadow = true;
+    this.scene.add(pads);
   }
 
   _buildSky() {
@@ -418,11 +678,18 @@ export class City {
         const centreDist = dist2d((bx0 + bx1) / 2, (bz0 + bz1) / 2, 0, 0);
         const tall = centreDist < 130;
         const count = tall ? randInt(rng, 1, 2) : randInt(rng, 2, 4);
-        const w = (bx1 - bx0) / (count === 1 ? 1 : 2);
-        const d = (bz1 - bz0) / (count <= 2 ? 1 : 2);
+        // V2.2: the placement grid matches the count — 1x1, 2x1 side by
+        // side along X, 2x2 — with w and d divided by the matching
+        // cols/rows, so no footprint ever crosses its block edge onto the
+        // road below (the old code halved w but not d for count==2, and the
+        // 2nd building straddled the east-west road under its block).
+        const cols = count === 1 ? 1 : 2;
+        const rows = count <= 2 ? 1 : 2;
+        const w = (bx1 - bx0) / cols;
+        const d = (bz1 - bz0) / rows;
         let placed = 0;
-        for (let gx = 0; gx < 2 && placed < count; gx++) {
-          for (let gz = 0; gz < 2 && placed < count; gz++) {
+        for (let gx = 0; gx < cols && placed < count; gx++) {
+          for (let gz = 0; gz < rows && placed < count; gz++) {
             const cx = bx0 + gx * w + w / 2;
             const cz = bz0 + gz * d + d / 2;
             const bw = w * rand(rng, 0.62, 0.85);

@@ -1,11 +1,18 @@
 // vehicles.js — detailed car models, arcade driving physics, and traffic AI.
 // V2: five body types (sedan / hatch / pickup / van / taxi), separate glass,
 // grille, mirrors, licence plates, spoked rims, exhaust, and a seated driver
-// silhouette inside every driven car. Written for Solmar Bay: Street Heat.
+// silhouette inside every driven car.
+// V2.2: sculpted bodies — sloped hood and trunk, fender arches over the
+// wheels, spinning wheel groups with five-spoke rims, shaped headlight
+// clusters with fog lamps, slatted grille, door shut lines and handles,
+// mirrors on stalks, sunroofs — plus SUV and coupe body types, so traffic
+// reads as real cars instead of plain boxes. Visuals only: driving physics,
+// collision and traffic logic are untouched.
+// Written for Solmar Bay: Street Heat (make.fun gta6-01).
 
 import * as THREE from 'three';
 import { angleLerp, clamp, dist2d, hash2, lerpColor, pick, pushOutOfBox, rand, randInt } from './utils.js';
-import { CITY_HALF, ROAD_HALF, ROAD_LINES } from './city.js';
+import { CITY_HALF, ROAD_HALF, ROAD_LINES, SIDEWALK_H } from './city.js';
 
 export const CAR_COLORS = [0xc83228, 0x2a5ac8, 0xe8b828, 0x3a8a4a, 0x888888, 0xd8d8d8, 0x222226, 0x8a4ac8, 0x2a9a9a];
 
@@ -83,24 +90,61 @@ export function makeCarMesh(color, opts = {}) {
     pickup: { long: 4.6, wide: 1.95, cabinL: 0.34, cabinZ: -0.55, roofY: 1.66 },
     van: { long: 4.5, wide: 2.0, cabinL: 0.62, cabinZ: 0.1, roofY: 1.98 },
     taxi: { long: 4.2, wide: 1.9, cabinL: 0.46, cabinZ: -0.1, roofY: 1.58 },
+    suv: { long: 4.4, wide: 1.95, cabinL: 0.55, cabinZ: 0.05, roofY: 1.78 },
+    coupe: { long: 4.4, wide: 1.9, cabinL: 0.38, cabinZ: 0.25, roofY: 1.42 },
   }[bodyType] || { long: 4.2, wide: 1.9, cabinL: 0.46, cabinZ: -0.1, roofY: 1.58 };
   const long = dims.long;
   const wide = dims.wide;
+  // Bigger wheels for the taller bodies.
+  const wheelR = bodyType === 'suv' || bodyType === 'pickup' ? 0.40 : 0.36;
+  const wheelZ = long * 0.34;
+  const wheelX = wide / 2 - 0.10;
 
-  // Lower body with a slightly sculpted deck.
+  // Lower body with a sculpted deck: a hood sloping down toward the nose,
+  // a trunk deck at the rear, and a beltline trim along the flanks, so the
+  // silhouette reads as a car instead of a slab.
   const body = new THREE.Mesh(new THREE.BoxGeometry(wide, 0.62, long), bodyMat);
   body.position.y = 0.55;
   body.castShadow = true;
   group.add(body);
-  const deck = new THREE.Mesh(new THREE.BoxGeometry(wide * 0.94, 0.22, long * 0.92), bodyMat);
-  deck.position.y = 0.92;
-  deck.castShadow = true;
-  group.add(deck);
+  const hood = new THREE.Mesh(new THREE.BoxGeometry(wide * 0.88, 0.10, long * 0.22), bodyMat);
+  hood.position.set(0, 0.99, -long * 0.37);
+  hood.rotation.x = 0.10;
+  hood.castShadow = true;
+  group.add(hood);
+  if (bodyType !== 'pickup' && bodyType !== 'van') {
+    const trunk = new THREE.Mesh(new THREE.BoxGeometry(wide * 0.88, 0.10, long * 0.15), bodyMat);
+    trunk.position.set(0, 0.99, long * 0.40);
+    trunk.rotation.x = -0.06;
+    trunk.castShadow = true;
+    group.add(trunk);
+  }
+  // Beltline trim along both flanks (the shoulder line under the glass).
+  for (const x of [-wide / 2 - 0.005, wide / 2 + 0.005]) {
+    const belt = new THREE.Mesh(new THREE.BoxGeometry(0.03, 0.05, long * 0.78), darkMat);
+    belt.position.set(x, 0.95, 0);
+    group.add(belt);
+  }
   // Side skirts.
   for (const x of [-wide / 2 + 0.03, wide / 2 - 0.03]) {
     const skirt = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.18, long * 0.6), darkMat);
     skirt.position.set(x, 0.32, 0);
     group.add(skirt);
+  }
+  // Door shut lines + handles (two doors per side on closed bodies).
+  if (bodyType !== 'pickup' && bodyType !== 'van') {
+    for (const x of [-wide / 2 - 0.005, wide / 2 + 0.005]) {
+      for (const z of [-long * 0.06, long * 0.16]) {
+        const seam = new THREE.Mesh(new THREE.BoxGeometry(0.02, 0.34, 0.03), darkMat);
+        seam.position.set(x, 0.72, z);
+        group.add(seam);
+      }
+      for (const z of [-long * 0.12, long * 0.10]) {
+        const handle = new THREE.Mesh(new THREE.BoxGeometry(0.03, 0.045, 0.17), chromeMat);
+        handle.position.set(x, 0.98, z);
+        group.add(handle);
+      }
+    }
   }
 
   if (bodyType === 'pickup') {
@@ -144,6 +188,20 @@ export function makeCarMesh(color, opts = {}) {
         group.add(pillar);
       }
     }
+    // Sunroof panel on the closed-roof bodies.
+    if (bodyType === 'sedan' || bodyType === 'suv' || bodyType === 'coupe' || bodyType === 'taxi') {
+      const sunroof = new THREE.Mesh(new THREE.BoxGeometry(wide * 0.44, 0.03, long * 0.16), glassMat);
+      sunroof.position.set(0, dims.roofY + 0.05, dims.cabinZ - long * 0.05);
+      group.add(sunroof);
+    }
+    // Roof rails on the SUV.
+    if (bodyType === 'suv') {
+      for (const x of [-wide * 0.36, wide * 0.36]) {
+        const rail = new THREE.Mesh(new THREE.BoxGeometry(0.06, 0.07, long * dims.cabinL), darkMat);
+        rail.position.set(x, dims.roofY + 0.07, dims.cabinZ);
+        group.add(rail);
+      }
+    }
   }
   if (bodyType === 'van') {
     // Tall slab sides with painted windows.
@@ -153,28 +211,50 @@ export function makeCarMesh(color, opts = {}) {
       group.add(win);
     }
   }
-  // Front grille + chrome bar.
+  // Front grille with chrome slats + a lower intake.
   const grille = new THREE.Mesh(new THREE.BoxGeometry(wide * 0.6, 0.2, 0.08), darkMat);
   grille.position.set(0, 0.62, -long / 2 - 0.02);
   group.add(grille);
   const grilleBar = new THREE.Mesh(new THREE.BoxGeometry(wide * 0.62, 0.05, 0.09), chromeMat);
   grilleBar.position.set(0, 0.74, -long / 2 - 0.02);
   group.add(grilleBar);
+  for (let s = -1; s <= 1; s++) {
+    const slat = new THREE.Mesh(new THREE.BoxGeometry(0.04, 0.17, 0.02), chromeMat);
+    slat.position.set(s * wide * 0.18, 0.60, -long / 2 - 0.07);
+    group.add(slat);
+  }
+  const intake = new THREE.Mesh(new THREE.BoxGeometry(wide * 0.7, 0.12, 0.06), darkMat);
+  intake.position.set(0, 0.40, -long / 2 - 0.01);
+  group.add(intake);
   // Bumpers.
   for (const z of [-long / 2 + 0.08, long / 2 - 0.08]) {
     const bumper = new THREE.Mesh(new THREE.BoxGeometry(wide * 0.98, 0.22, 0.14), bodyMat);
     bumper.position.set(0, 0.42, z);
     group.add(bumper);
   }
-  // Round headlight lenses.
+  // Rear bumper reflector strips.
+  for (const x of [-wide * 0.32, wide * 0.32]) {
+    const reflector = new THREE.Mesh(
+      new THREE.BoxGeometry(0.3, 0.06, 0.03),
+      new THREE.MeshStandardMaterial({ color: 0xc81818, emissive: 0x551111, emissiveIntensity: 0.5 }),
+    );
+    reflector.position.set(x, 0.40, long / 2 + 0.06);
+    group.add(reflector);
+  }
+  // Shaped headlight clusters (swept boxes, angled in at the nose) with a
+  // small round fog lamp below each one.
   const headMat = new THREE.MeshStandardMaterial({ color: 0xfff8d0, emissive: 0xfff2a8, emissiveIntensity: 0.9 });
   const headlights = [];
   for (const x of [-0.62, 0.62]) {
-    const hl = new THREE.Mesh(new THREE.CylinderGeometry(0.17, 0.17, 0.08, 12), headMat);
-    hl.rotation.x = Math.PI / 2;
-    hl.position.set(x, 0.72, -long / 2 - 0.02);
+    const hl = new THREE.Mesh(new THREE.BoxGeometry(0.52, 0.16, 0.10), headMat);
+    hl.position.set(x, 0.74, -long / 2 - 0.02);
+    hl.rotation.y = -Math.sign(x) * 0.18;
     group.add(hl);
     headlights.push(hl);
+    const fog = new THREE.Mesh(new THREE.CylinderGeometry(0.09, 0.09, 0.06, 10), headMat);
+    fog.rotation.x = Math.PI / 2;
+    fog.position.set(x, 0.46, -long / 2 - 0.02);
+    group.add(fog);
   }
   // Full-width taillight bar.
   const tailMat = new THREE.MeshStandardMaterial({ color: 0xc81818, emissive: 0x881111, emissiveIntensity: 0.8 });
@@ -191,10 +271,13 @@ export function makeCarMesh(color, opts = {}) {
     if (z > 0) plate.rotation.y = Math.PI;
     group.add(plate);
   }
-  // Side mirrors.
+  // Side mirrors on short stalks.
   for (const x of [-wide / 2 - 0.08, wide / 2 + 0.08]) {
-    const mirror = new THREE.Mesh(new THREE.BoxGeometry(0.1, 0.12, 0.16), bodyMat);
-    mirror.position.set(x, 1.12, dims.cabinZ - long * dims.cabinL * 0.42);
+    const stalk = new THREE.Mesh(new THREE.BoxGeometry(0.16, 0.04, 0.04), bodyMat);
+    stalk.position.set(x, 1.10, dims.cabinZ - long * dims.cabinL * 0.42);
+    group.add(stalk);
+    const mirror = new THREE.Mesh(new THREE.BoxGeometry(0.07, 0.13, 0.18), bodyMat);
+    mirror.position.set(x + Math.sign(x) * 0.08, 1.13, dims.cabinZ - long * dims.cabinL * 0.42);
     group.add(mirror);
   }
   // Exhaust pipe.
@@ -202,28 +285,39 @@ export function makeCarMesh(color, opts = {}) {
   exhaust.rotation.x = Math.PI / 2;
   exhaust.position.set(wide * 0.3, 0.3, long / 2 + 0.06);
   group.add(exhaust);
-  // Wheels: tyre + rim + spokes.
-  const wheelGeo = new THREE.CylinderGeometry(0.36, 0.36, 0.28, 14);
+  // Wheels: tyre + rim + five spokes in one spinning group per wheel, so
+  // the spokes turn with the tyre (they used to float static beside it).
+  // Fender arches in body colour sit over each wheel.
+  const wheelGeo = new THREE.CylinderGeometry(wheelR, wheelR, 0.28, 14);
   wheelGeo.rotateZ(Math.PI / 2);
-  const rimGeo = new THREE.CylinderGeometry(0.2, 0.2, 0.3, 10);
+  const rimGeo = new THREE.CylinderGeometry(wheelR * 0.58, wheelR * 0.58, 0.30, 10);
   rimGeo.rotateZ(Math.PI / 2);
+  const spokeGeo = new THREE.BoxGeometry(0.04, wheelR * 0.95, 0.07);
+  const fenderGeo = new THREE.TorusGeometry(wheelR + 0.06, 0.09, 6, 14, Math.PI);
   const wheels = [];
-  for (const [x, z] of [[-0.88, -1.45], [0.88, -1.45], [-0.88, 1.45], [0.88, 1.45]]) {
-    const wheel = new THREE.Mesh(wheelGeo, tireMat);
-    wheel.position.set(x, 0.36, z);
-    wheel.castShadow = true;
+  for (const [x, z] of [[-wheelX, -wheelZ], [wheelX, -wheelZ], [-wheelX, wheelZ], [wheelX, wheelZ]]) {
+    const wheel = new THREE.Group();
+    wheel.position.set(x, wheelR, z);
+    const tyre = new THREE.Mesh(wheelGeo, tireMat);
+    tyre.castShadow = true;
+    wheel.add(tyre);
+    const rim = new THREE.Mesh(rimGeo, chromeMat);
+    wheel.add(rim);
+    const outer = Math.sign(x);
+    for (let s = 0; s < 5; s++) {
+      const spoke = new THREE.Mesh(spokeGeo, chromeMat);
+      spoke.position.x = outer * 0.15;
+      spoke.rotation.x = (s / 5) * Math.PI * 2;
+      wheel.add(spoke);
+    }
     group.add(wheel);
     wheels.push(wheel);
-    const rim = new THREE.Mesh(rimGeo, chromeMat);
-    rim.position.set(x, 0.36, z);
-    group.add(rim);
-    // Two crossed spokes on the outer face.
-    for (const rot of [0, Math.PI / 2]) {
-      const spoke = new THREE.Mesh(new THREE.BoxGeometry(0.32, 0.32, 0.05), chromeMat);
-      spoke.position.set(x + (x > 0 ? 0.15 : -0.15), 0.36, z);
-      spoke.rotation.x = rot;
-      group.add(spoke);
-    }
+    const fender = new THREE.Mesh(fenderGeo, bodyMat);
+    fender.rotation.y = Math.PI / 2;
+    // Just outside the body flank, hugging the tyre's outer face.
+    fender.position.set(x + Math.sign(x) * 0.12, wheelR, z);
+    fender.castShadow = true;
+    group.add(fender);
   }
   // Spoiler for sports cars.
   if (bodyType === 'sports') {
@@ -348,7 +442,7 @@ export function stepCar(car, input, dt, city, onCrash) {
   }
 }
 
-const TRAFFIC_BODIES = ['sedan', 'sedan', 'sedan', 'hatch', 'hatch', 'pickup', 'van', 'taxi', 'sports'];
+const TRAFFIC_BODIES = ['sedan', 'sedan', 'sedan', 'hatch', 'hatch', 'pickup', 'van', 'taxi', 'sports', 'suv', 'suv', 'coupe'];
 
 export class TrafficSystem {
   constructor(scene, city, rng) {
@@ -488,7 +582,10 @@ export class TrafficSystem {
     ];
     this.parked = spots.map((s) => {
       const mesh = makeCarMesh(s.color, { body: s.body, sports: s.body === 'sports' });
-      mesh.group.position.set(s.x, 0, s.z);
+      // Parked on the sidewalk strip beside the road (8 from the centreline),
+      // so they sit on the raised slab; stepCar drops the mesh back to road
+      // level (y=0) the moment the car is stolen and driven.
+      mesh.group.position.set(s.x, SIDEWALK_H, s.z);
       mesh.group.rotation.y = s.heading;
       this.scene.add(mesh.group);
       return { ...s, mesh, taken: false };
